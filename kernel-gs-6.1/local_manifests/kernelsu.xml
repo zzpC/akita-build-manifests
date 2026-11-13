@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
   <remote
-      name="local"
-      fetch="file:///mnt/Disk2T/android/kernelSu" />
+      name="fork"
+      fetch="https://github.com/zzpC" />
 
   <project
       name="KernelSU"
       path="common/gki/KernelSU"
-      remote="local"
-      revision="refs/tags/v3.3.1" />
+      remote="fork"
+      revision="87849999f8c57829714aa6eed10602b3aad8d429" />
 </manifest>
