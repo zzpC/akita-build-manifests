@@ -1,0 +1,13 @@
+diff --git a/default.xml b/default.xml
+index c089db8..c921be6 100644
+--- a/default.xml
++++ b/default.xml
+@@ -5,7 +5,7 @@
+            review="review.lineageos.org" />
+ 
+   <remote  name="aosp"
+-           fetch="https://android.googlesource.com"
++           fetch="https://mirrors.tuna.tsinghua.edu.cn/git/AOSP"
+            review="android-review.googlesource.com"
+            revision="refs/heads/main-kernel-build-2023" />
+ 

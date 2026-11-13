@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote
+      name="local"
+      fetch="file:///mnt/Disk2T/android/kernelSu" />
+
+  <project
+      name="KernelSU"
+      path="common/gki/KernelSU"
+      remote="local"
+      revision="refs/tags/v3.3.1" />
+</manifest>

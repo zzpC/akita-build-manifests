@@ -1,0 +1,20 @@
+diff --git a/default.xml b/default.xml
+index 16c8d6c..1b9c2c5 100644
+--- a/default.xml
++++ b/default.xml
+@@ -9,13 +9,13 @@
+            fetch="ssh://git@github.com" />
+ 
+   <remote  name="aosp"
+-           fetch="https://android.googlesource.com"
++           fetch="https://mirrors.tuna.tsinghua.edu.cn/git/AOSP"
+            review="android-review.googlesource.com"
+            revision="refs/tags/android-17.0.0_r1" />
+ 
+   <default revision="refs/heads/lineage-24.0"
+            remote="github"
+-           sync-c="true"
++           sync-c="true" clone-depth="1"
+            sync-j="4" />
+ 
+   <contactinfo bugurl="go/repo-bug" />
