@@ -19,6 +19,15 @@ LineageOS 24.0 对应 Android 17，akita 使用 6.1 内核。官方设备元数�
 
 > **重要：**本文固定到具体提交，不要求跟随各 Fork 的最新分支。后续新增提交应先构建验证，再更新固定值。
 
+**2026-11-13 实机验证结果：**
+
+- 成功刷入 `lineage-24.0-20261113-UNOFFICIAL-akita.zip`，系统为 Android 17。
+- 内核 `Image` 的内嵌配置包含 `CONFIG_KSU=y`，`System.map` 中有 231 个 `ksu_*` 符号。
+- KernelSU Manager `v3.3.1` 显示“工作中 / GKI / 32680-5”，SELinux 为强制执行。
+- Manager 中“自 v3.0.0 起 GKI 工作模式仅用于测试环境”的横幅是模式提醒，不是构建或 root 失败。
+
+其他机器复刻时应以本文的验证条件为准；构建日期、ZIP 文件名和 SHA-256 不要求与本次完全一致。
+
 ## 2. 定制代码与官方源码的关系
 
 完整构建由两个源码工作区组成：
@@ -59,12 +68,12 @@ GKI 中的 `drivers/kernelsu` 是实际参与内核编译的 KernelSU 源码。�
 
 官方构建指南建议准备 Linux 构建环境、`adb`、`fastboot`、`repo`、Git、Python 3 和足够磁盘空间；LineageOS 21 及以上建议 64 GB RAM、约 400 GB 可用存储，额外缓存和多设备构建需要更多空间。[cite:1]
 
-按官方指南安装构建依赖、Platform-Tools 和 `repo`，并配置 Git 作者信息。可选启用 `ccache`：
+按官方指南安装构建依赖、Platform-Tools 和 `repo`，并配置 Git 作者信息。另需 `cpio`、`lz4`、`unzip` 和 `rsync`，用于处理官方镜像与 Recovery ramdisk。可选启用 `ccache`：
 
 ```bash
 export USE_CCACHE=1
 export CCACHE_EXEC=/usr/bin/ccache
-ccache -M 50G
+ccache -M 100G
 ```
 
 以下命令使用当前目录布局；路径不同时需要相应调整：
@@ -74,7 +83,12 @@ export ANDROID_ROOT=/mnt/Disk2T/android
 export LINEAGE_ROOT=$ANDROID_ROOT/lineage
 export KERNEL_WS=$LINEAGE_ROOT/out-kernel/google/gs-6.1
 export MANIFESTS=$ANDROID_ROOT/akita-build-manifests
+export FIRMWARE_ROOT=$ANDROID_ROOT/firmware
+export SKIP_KERNEL_SYNC=1
+mkdir -p "$FIRMWARE_ROOT"
 ```
+
+`SKIP_KERNEL_SYNC=1` 只阻止 LineageOS 的 lunch/brunch 自动重新同步内核工作区，不影响后文手动执行的 `repo sync`。
 
 ## 4. 获取配置备份与主 ROM 官方源码
 
@@ -151,7 +165,7 @@ repo sync
 
 ```bash
 cd "$KERNEL_WS/common/gki"
-git remote add fork git@github.com:zzpC/kernel_common.git
+git remote add fork https://github.com/zzpC/kernel_common.git
 git fetch fork akita-ksu
 git switch -c akita-ksu 9d4c6b2a74cc1889a4f125e878748e70e9b712a3
 git branch --set-upstream-to=fork/akita-ksu akita-ksu
@@ -170,7 +184,7 @@ git rev-parse HEAD
 
 ```bash
 cd "$KERNEL_WS/private/devices"
-git remote add fork git@github.com:zzpC/android_kernel_google_gs-6.1_devices.git
+git remote add fork https://github.com/zzpC/android_kernel_google_gs-6.1_devices.git
 git fetch fork akita-ksu
 git switch -c akita-ksu 69d8014525a927ba640e33115630a380a7d272ab
 git branch --set-upstream-to=fork/akita-ksu akita-ksu
@@ -180,13 +194,13 @@ git branch --set-upstream-to=fork/akita-ksu akita-ksu
 
 > 后续进行上述定制构建时，继续使用 `SKIP_KERNEL_SYNC=1`，避免同步任务覆盖本地定制分支。需要升级时单独创建升级分支，不在当前工作区直接强制同步。
 
-## 6. 编译 akita 内核
+## 6. 编译并验证 akita 内核
 
 在内核工作区根目录执行：
 
 ```bash
 cd "$KERNEL_WS"
-SKIP_KERNEL_SYNC=1 ./build_akita.sh
+./build_akita.sh
 ```
 
 脚本实际调用：
@@ -195,82 +209,146 @@ SKIP_KERNEL_SYNC=1 ./build_akita.sh
 tools/bazel run --config=akita //private/devices/google/akita:akita/dist
 ```
 
-主要产物位于：
+主要产物位于 `$KERNEL_WS/out/akita/dist/`，包括：
 
-```text
-$KERNEL_WS/out/akita/dist/
-```
-
-其中包括：
-
-- `boot.img`
-- `dtbo.img`
-- `vendor_kernel_boot.img`
-- `system_dlkm.img`
-- `vendor_dlkm_staging_archive.tar.gz`
+- `Image`、`Image.lz4`、`System.map` 和 `.config`
+- `boot.img`、`dtbo.img`、`vendor_kernel_boot.img`
+- `system_dlkm.img`、`vendor_dlkm_staging_archive.tar.gz`
 - 各类 `.ko` 模块、DTB、模块列表和符号文件
 
-**不要执行 KernelSU 的 `setup.sh`。**当前定制已经完成驱动、Kconfig、Makefile 和 Kleaf 集成，运行官方安装脚本可能自动拉取或切换版本，破坏固定提交和本地修改。
+**不要执行 KernelSU 的 `setup.sh`。**固定提交已经完成驱动、Kconfig、Makefile、UAPI 和 Kleaf 集成，运行官方安装脚本可能自动拉取或切换版本，破坏本地定制。
 
-## 7. 将内核产物接入主 ROM
+### 6.1 必须验证实际 Image，不能只看 defconfig
 
-### 7.1 同步 Kleaf 产物
-
-```bash
-rsync -a "$KERNEL_WS/out/akita/dist/" \
-  "$LINEAGE_ROOT/device/google/akita-kernels/6.1/"
-```
-
-这里不使用 `--delete`，避免误删目录中需要保留的配置文件。
-
-主 ROM 的 `.gitignore` 会排除 `.img`、`.ko`、DTB 和多数内核构建产物，因此这些二进制通常不会出现在普通 `git status` 中，也不需要为了它们 Fork `akita-kernels`。[cite:14]
-
-### 7.2 验证产物衔接
+构建成功后执行：
 
 ```bash
-sha256sum "$KERNEL_WS/out/akita/dist/boot.img" \
-  "$LINEAGE_ROOT/device/google/akita-kernels/6.1/boot.img"
+"$KERNEL_WS/common/gki/scripts/extract-ikconfig" \
+  "$KERNEL_WS/out/akita/dist/Image" | \
+  grep -E '^CONFIG_(KSU|KPROBES|KPROBE_EVENTS|EXT4_FS)=y$'
+
+grep -cE ' ksu_[A-Za-z0-9_]+$' \
+  "$KERNEL_WS/out/akita/dist/System.map"
 ```
 
-两个 SHA-256 必须一致。还可检查 `vendor_kernel_boot.img` 和 `dtbo.img`，防止主 ROM 意外使用旧内核。
+第一条命令应输出 4 行配置，第二条命令的符号数必须大于 0。本次实测为 231；后续版本数量可以不同。
 
-### 7.3 准备主 ROM 构建环境与厂商文件
+**只有 `akita_defconfig` 或 dist `.config` 里出现 `CONFIG_KSU=y` 还不够。**如果 Kleaf 错用预构建 GKI，配置可能正确，但最终 `Image` 仍不含 KernelSU。个人 devices 提交中的 `build:akita --nouse_prebuilt_kernel` 正是用于避免这一问题。[cite:8]
+
+如果配置缺失或符号数为 0，应停止后续刷机，核对：
+
+1. `common/gki` 是否为 `9d4c6b2a74cc1889a4f125e878748e70e9b712a3`。
+2. `private/devices` 是否为 `69d8014525a927ba640e33115630a380a7d272ab`。
+3. `private/devices/google/akita/device.bazelrc` 是否包含 `build:akita --nouse_prebuilt_kernel`。
+4. `common/gki/drivers/kernelsu/uapi` 是否存在；缺少 `uapi/app_profile.h` 会导致源码内核编译失败。
+
+## 7. 准备 blobs、编译完整 ROM 并验证衔接
+
+### 7.1 先离线提取厂商专有文件
+
+官方构建指南可以从设备提取 blobs，但官方 `user` 系统通常不允许 `adb root`，直接读取 `/vendor` 可能出现大量 `Permission denied`。本次可复现的做法是：**从与源码基线匹配的官方 LineageOS 包离线提取，并单独补齐 Recovery ramdisk 中的 HAL。**
+
+从 LineageOS 官方渠道下载同一构建日期的 OTA ZIP 和 Recovery 镜像。若 Recovery 以 ZIP 提供，先解压并取其中的 `vendor_boot.img`。本文示例为 2026-11-11：
+
+```text
+$FIRMWARE_ROOT/lineage-24.0-20261111-nightly-akita-signed.zip
+$FIRMWARE_ROOT/vendor_boot-official-20261111.img
+```
+
+先提取主包：
+
+```bash
+cd "$LINEAGE_ROOT/device/google/akita/akita"
+./extract-files.py -n \
+  "$FIRMWARE_ROOT/lineage-24.0-20261111-nightly-akita-signed.zip"
+```
+
+再将官方 `vendor_boot.img` 放入独立目录，让 extract-utils 自动解开 Recovery ramdisk，并只处理两个 HAL section：
+
+```bash
+rm -rf /tmp/akita-recovery-blobs
+mkdir -p /tmp/akita-recovery-blobs
+cp "$FIRMWARE_ROOT/vendor_boot-official-20261111.img" \
+  /tmp/akita-recovery-blobs/vendor_boot.img
+
+./extract-files.py -n -s '*HAL' /tmp/akita-recovery-blobs
+```
+
+`-s` 使用的是 `fnmatch` 模式，必须写成 `'*HAL'`，不要写成正则表达式。提取结果应位于 `vendor/google/akita`。至少检查：
+
+```bash
+ls "$LINEAGE_ROOT/vendor/google/akita/akita-vendor.mk" \
+  "$LINEAGE_ROOT/vendor/google/akita/proprietary/recovery/system/bin/hw/android.hardware.boot-service.default_recovery-pixel" \
+  "$LINEAGE_ROOT/vendor/google/akita/proprietary/recovery/system/bin/hw/android.hardware.health-service.zuma_recovery"
+```
+
+如果换用其他日期的官方包，OTA ZIP 与 `vendor_boot.img` 必须来自同一构建。不要把官方 Android 17 测试版固件、其他日期的 LineageOS 包和本次自编译镜像混合提取。[cite:1][cite:3]
+
+### 7.2 使用 brunch 自动接入内核并编译 ROM
+
+先完成 blobs 提取，再执行：
 
 ```bash
 cd "$LINEAGE_ROOT"
 source build/envsetup.sh
-breakfast akita
-```
-
-按照官方指南连接已开启 ADB 的设备，在 `device/google/akita` 中运行 `extract-files.py`；若该脚本不存在，则运行 `extract-files.sh`。提取结果应进入 `vendor/google`。[cite:1]
-
-### 7.4 编译完整 ROM
-
-```bash
-cd "$LINEAGE_ROOT"
-croot
+export USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache
+export SKIP_KERNEL_SYNC=1
 brunch akita
 ```
 
-构建成功后进入输出目录：
+**不能省略 `SKIP_KERNEL_SYNC=1`。**`brunch` 中的 breakfast/lunch 会调用 `build_kernel`；未设置该变量时，它会执行 `repo sync --detach --force-sync`，可能覆盖个人 GKI 和 devices 分支。
+
+在当前 LineageOS 24.0 中，内核构建成功后会自动将 `$KERNEL_WS/out/akita/dist/` 复制到 `device/google/akita-kernels/6.1/`，因此推荐直接使用上述流程，不需要手工 `rsync`。
+
+如果确实要手工同步 Kleaf 产物，则必须同时设置 `SKIP_KERNEL_BUILD=1`，否则 brunch 会再次构建并覆盖手工复制的内容。主 ROM 的 `.gitignore` 会排除大部分内核二进制生成物，不需要为了这些文件 Fork `akita-kernels`。[cite:14]
+
+### 7.3 验证最终 ROM 中的内核
+
+构建成功后执行：
 
 ```bash
+export OUT="$LINEAGE_ROOT/out/target/product/akita"
 cd "$OUT"
+ROM_ZIP=$(ls -1t "$OUT"/lineage-24.0-*-UNOFFICIAL-akita.zip | head -n 1)
+unzip -tq "$ROM_ZIP"
 ```
 
-重点产物为：
+ZIP 检查应输出 `No errors detected`。然后解出最终 `boot.img` 中的内核，与源码构建的 `Image.lz4` 比较：
 
-- `vendor_boot.img`：LineageOS Recovery 镜像。
-- `lineage-24.0-*-UNOFFICIAL-akita.zip`：完整安装包。[cite:1]
+```bash
+rm -rf /tmp/akita-boot-check
+mkdir -p /tmp/akita-boot-check
+"$LINEAGE_ROOT/out/host/linux-x86/bin/unpack_bootimg" \
+  --boot_img "$OUT/boot.img" --out /tmp/akita-boot-check
+
+sha256sum /tmp/akita-boot-check/kernel \
+  "$KERNEL_WS/out/akita/dist/Image.lz4"
+
+grep -cE ' ksu_[A-Za-z0-9_]+$' \
+  "$LINEAGE_ROOT/device/google/akita-kernels/6.1/System.map"
+```
+
+两个 SHA-256 必须一致，KSU 符号数必须大于 0。**最终 ROM 的 `boot.img` 才是实际刷机对象，不能只比较 `dist/boot.img` 与预编译目录中的同名文件。**
+
+刷机所需产物为：
+
+- `boot.img`、`dtbo.img`、`vendor_kernel_boot.img`
+- `vendor_boot.img`：LineageOS Recovery 镜像
+- `lineage-24.0-*-UNOFFICIAL-akita.zip`：完整安装包 [cite:1]
 
 ## 8. 刷入 Pixel 8a
 
 ### 8.1 进入 Bootloader 并按需解锁
 
+确保电量高于 50%、数据已备份、Google 账号已移除，然后执行：
+
 ```bash
 adb reboot bootloader
-fastboot devices
+fastboot getvar product
+fastboot getvar current-slot
 ```
+
+`product` 必须为 `akita`。记录当前槽位，fastboot 默认向该槽位写入启动镜像。
 
 仅在 Bootloader 尚未解锁时执行：
 
@@ -290,20 +368,22 @@ akita 官方元数据列出的启动栈为 `boot`、`dtbo`、`vendor_kernel_boot
 fastboot flash boot "$OUT/boot.img"
 fastboot flash dtbo "$OUT/dtbo.img"
 fastboot flash vendor_kernel_boot "$OUT/vendor_kernel_boot.img"
+fastboot reboot bootloader
 fastboot flash vendor_boot "$OUT/vendor_boot.img"
+fastboot reboot recovery
 ```
 
-这些镜像必须来自同一套定制构建，不能用旧官方镜像与新的 OTA ZIP 混合。
+这些镜像必须来自同一套定制构建，不能用旧官方镜像与新的 OTA ZIP 混合。本已验证流程不额外刷写 bootloader、基带或其他固件分区。
 
-完成后通过 Bootloader 菜单选择 **Recovery Mode**。官方元数据也支持关机后按住 Volume Down + Power，再从菜单进入 Recovery。[cite:4]
+如果 `fastboot reboot recovery` 未进入 Recovery，也可以通过 Bootloader 菜单选择 **Recovery Mode**，或关机后按住 Volume Down + Power 再选择 Recovery。[cite:4]
 
 ### 8.3 首次安装时格式化数据
 
-从官方系统、其他 ROM 或不同签名体系迁移时，在 Lineage Recovery 中执行 **Factory reset / Format data**。此操作会清除用户数据，执行前再次确认备份。
+从官方系统、其他 ROM 或不同签名体系迁移时，在 Lineage Recovery 中依次选择 **Factory reset → Format data / Factory reset → Format data**。此操作会清除用户数据，执行前再次确认备份。
 
 同一套定制系统的后续升级是否保留数据，应按具体升级路径验证，不在每次刷机时默认格式化。
 
-### 8.4 通过 ADB Sideload 安装
+### 8.4 通过 ADB Sideload 安装并重启
 
 在 Recovery 中选择 **Apply update → Apply from ADB**，然后检查设备状态：
 
@@ -314,34 +394,41 @@ adb devices
 设备应显示为 `sideload`。执行：
 
 ```bash
-adb -d sideload "$OUT/lineage-24.0-YYYYMMDD-UNOFFICIAL-akita.zip"
+adb -d sideload "$ROM_ZIP"
 ```
 
-将 `YYYYMMDD` 和文件名替换为实际产物。Google 的 OTA 指南同样要求先进入 Apply update from ADB，再使用 `adb sideload <文件>`。[cite:13]
+如果新打开了终端，请将 `$ROM_ZIP` 替换为实际 ZIP 的绝对路径。Google 的 OTA 指南同样要求先进入 Apply update from ADB，再使用 `adb sideload <文件>`。[cite:13]
 
-如果不希望本地安装 ADB，也可以使用官方 Lineage Flash Tools 的 ADB 页面选择 ZIP 并执行 Sideload；启动镜像仍应按 akita 的设备要求处理。[cite:6]
+成功后电脑端应显示 `Total xfer: 1.00x`。手机屏幕显示 **Install completed / 安装完成** 后，选择 **Reboot system now**。如果 Recovery 报告设备不匹配、文件损坏或安装失败，不能忽略错误继续重启。
 
-若 Recovery 提示非官方签名或测试密钥警告，只有在确认 ZIP 是本次自行构建、设备代号和文件路径均正确时才继续。设备不匹配、文件损坏等错误不能忽略。
+离开 sideload 后 `adb devices` 可能显示 `unauthorized`，此时直接操作 Recovery 界面即可。首次启动完成初始设置后，需要重新开启 USB 调试并授权电脑，才能安装 Manager。[cite:6]
 
 ## 9. 安装并验证 KernelSU Manager
 
-从 KernelSU 官方 `v3.3.1` 发布页获取匹配的 Manager APK，并安装：[cite:12]
+**内置 KernelSU 内核不会自动在桌面安装 Manager。**从 KernelSU 官方 `v3.3.1` 发布页获取匹配的 APK，在系统启动并重新授权 ADB 后安装：[cite:12]
 
 ```bash
-adb install /path/to/KernelSU-v3.3.1.apk
+adb install -r /path/to/KernelSU_v3.3.1_32680.apk
+adb shell pm path me.weishu.kernelsu
 ```
 
-启动 Manager 后检查：
+安装命令应返回 `Success`，`pm path` 应返回 Manager 的安装路径。启动 Manager 后检查：
 
-1. 能识别 KernelSU 内核，版本与 `v3.3.1` / `32680` 对应。
-2. 仅向可信应用授予 root。
-3. 使用终端或 ADB 验证授权后的身份：
+1. 首页显示 **工作中**，模式为 **GKI**。
+2. 内核版本显示 `32680` 或本次实测的 `32680-5`，Manager 为 `v3.3.1`。
+3. SELinux 保持 **强制执行**。
+4. 仅向可信应用授予 root。
+
+还可以检查运行中内核：
 
 ```bash
-adb shell su -c id
+adb shell uname -a
+adb shell 'zcat /proc/config.gz | grep -E "^CONFIG_(KSU|KPROBES|KPROBE_EVENTS)=y$"'
 ```
 
-同时检查 `uname -a`、Wi-Fi、相机、指纹、通话和移动网络，确认内核与厂商模块工作正常。
+普通 ADB shell 默认不等于已获 KernelSU root，读取 `/proc/kallsyms` 被拒绝也不能说明 KernelSU 失效。只有在明确启用 su 兼容并授权 shell 后，才使用 `adb shell su -c id` 作为附加验证；也可以在已授权的终端应用中执行 `su -c id`。
+
+同时检查 Wi-Fi、相机、指纹、通话和移动网络，确认内核与厂商模块工作正常。
 
 ## 10. 长期维护建议
 
@@ -352,13 +439,14 @@ adb shell su -c id
 - 新提交先推送个人 Fork，再更新经过验证的固定提交记录。
 - 不把 `out/`、Bazel 输出、OTA ZIP、`.img`、`.ko` 等生成物提交到源码仓库。
 
-### 10.2 上游升级
+### 10.2 上游升级与 OTA
 
 ```text
 获取新的 AOSP / LineageOS / KernelSU 基线
 → 创建升级分支
 → 迁移个人提交
 → 完整编译内核和 ROM
+→ 验证实际 Image 和最终 boot.img 均含 KernelSU
 → 刷机验证
 → 推送并标记验证版本
 → 更新 manifest 固定提交
@@ -366,13 +454,32 @@ adb shell su -c id
 
 KernelSU 升级还需同步检查 Kleaf 版本号、UAPI、Manager 和 GKI 内置源码，不能只更新独立仓库分支名称。
 
+**当前采用 GKI 内置模式，直接安装普通 LineageOS OTA 会替换目标槽位的 boot 内核并丢失 KernelSU/root。**升级时应重新构建并刷入含 KSU 的完整 ROM，或在确认新内核兼容后单独恢复定制 boot 镜像。不要只升级 Manager 而忽略内核与 UAPI 的匹配。
+
+Manager 的 GKI 横幅表示官方更推荐手机采用便于 OTA 和卸载的 LKM 模式，并不表示当前内置模式失效。若后续更看重 OTA 便利性，可另行评估 LKM；这与本次已验证的 GKI 构建是两条不同安装路径。[cite:15]
+
 ### 10.3 不建议的操作
 
 - 不要直接修改 `.repo/manifests/default.xml` 作为长期配置。
 - 不要在定制工作区无条件执行 `repo sync` 后继续使用旧分支。
+- 不要在主 ROM 构建时省略 `SKIP_KERNEL_SYNC=1`。
 - 不要执行 KernelSU `setup.sh` 覆盖固定集成。
 - 不要把 KernelSU 官方 `main` 的更新直接合并到稳定版本而不验证。
 - 不要混用不同 Android 版本、不同构建批次或不同设备的启动镜像。
+- 不要在自编译测试密钥系统上重新锁定 Bootloader。
+
+## 11. 实测问题与排查
+
+| 现象 | 原因与处理 |
+|---|---|
+| defconfig 有 `CONFIG_KSU=y`，但 `Image` 没有 KSU | Kleaf 默认使用预构建 GKI。确认 akita `device.bazelrc` 含 `--nouse_prebuilt_kernel`，并检查 `System.map` 符号。 |
+| 编译提示 `uapi/app_profile.h` 不存在 | KernelSU 根目录的 `uapi` 未纳入内核源码。使用固定 GKI 提交，确认 `drivers/kernelsu/uapi` 完整，不要重新运行 `setup.sh`。 |
+| breakfast 报 `akita-vendor.mk` 不存在 | blobs 尚未提取或提取目录错误。先完成第 7.1 节，再运行 brunch。 |
+| ADB 提取大量 `Permission denied` | 官方 `user` 系统不能 `adb root`。改用官方 OTA ZIP 和 `vendor_boot.img` 离线提取。 |
+| Recovery 中 `adb unauthorized` | 直接通过屏幕选择 Format data、Apply from ADB 或 Reboot system now；只有 `sideload` 状态需要电脑推送 ZIP。 |
+| 刷机后桌面没有 KernelSU | 内核支持不等于预装 Manager，按第 9 节单独安装 APK。 |
+| Manager 提示 GKI 仅用于测试 | 这是内置模式的固定提示；首页显示“工作中”即表示已识别内核。 |
+| 内核日志出现 `realpath ... common/gki` 或 `gcip-mailbox.c` 解析信息 | 若最终仍有 `Build completed successfully`，这些信息不是本次失败原因；真正的 `FAILED` / `Error` 才需要中止排查。 |
 
 ## Sources
 
@@ -403,3 +510,5 @@ KernelSU 升级还需同步检查 Kleaf 版本号、UAPI、Manager 和 GKI 内�
 <a id="cite-13"></a>[cite:13] [Google：Pixel OTA 镜像与 ADB Sideload 指南](https://developers.google.cn/android/ota?hl=en)
 
 <a id="cite-14"></a>[cite:14] [LineageOS：akita-kernels 的 .gitignore](https://github.com/LineageOS/android_device_google_akita-kernels/blob/lineage-24.0/.gitignore)
+
+<a id="cite-15"></a>[cite:15] [KernelSU：安装指南（GKI 与 LKM 模式）](https://kernelsu.org/guide/installation.html)
